@@ -5,7 +5,7 @@ pattern engine for algorithmic music.
 
 ## Current status
 
-Phase-1 core parity checkpoint is now delivered.
+Phase-1 core parity checkpoint is now delivered, including utility-phase parity work.
 
 Implemented so far:
 
@@ -19,7 +19,8 @@ Implemented so far:
   - `Pattern(T)` with `pure`, `silence`
   - query helpers (`query`, `queryArc`, `firstCycle`)
   - phase-1 combinators/transforms: `stack`, `slowcat`, `fastcat`/`sequence`/`cat`, `fast`, `slow`, `early`, `late`, `rev`
-- Focused Rust→Zig semantic parity tests plus mapping note in `PHASE1_RUST_TEST_MAPPING.md`
+  - utility-phase combinators/signals: `euclid`, `euclid_rot`, `range`, `saw`, `sine`, `cosine`, `tri`, `square`
+- Focused Rust→Zig semantic parity tests plus mapping note in `PHASE1_RUST_TEST_MAPPING.md` (including utility parity cases)
 
 ## Near-term roadmap
 

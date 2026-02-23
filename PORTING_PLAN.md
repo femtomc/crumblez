@@ -10,12 +10,12 @@ verifiable milestones.
 - [x] Port foundational time/event types (`Fraction`, `TimeSpan`, `Hap`, `State`)
 - [x] Add minimal `Pattern` support (`pure`, `silence`, `query`)
 
-## Phase 1: pattern semantics parity (core) (in progress)
+## Phase 1: pattern semantics parity (core) (completed)
 
 - [x] Port key constructors/combinators:
   - `stack`, `slowcat`, `fastcat`, `sequence`, `cat`
   - `fast`, `slow`, `early`, `late`, `rev`
-- [ ] Port utility combinators:
+- [x] Port utility combinators:
   - `euclid`, `euclid_rot`
   - `range`, `saw`, `sine`, `cosine`, `tri`, `square`
 - [x] Port representative Rust tests for semantic parity (see `PHASE1_RUST_TEST_MAPPING.md`)

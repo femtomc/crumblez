@@ -13,6 +13,14 @@ pub const fastcat = @import("pattern.zig").fastcat;
 pub const sequence = @import("pattern.zig").sequence;
 pub const cat = @import("pattern.zig").cat;
 pub const slowcat = @import("pattern.zig").slowcat;
+pub const saw = @import("pattern.zig").saw;
+pub const sine = @import("pattern.zig").sine;
+pub const cosine = @import("pattern.zig").cosine;
+pub const tri = @import("pattern.zig").tri;
+pub const square = @import("pattern.zig").square;
+pub const range = @import("pattern.zig").range;
+pub const euclid = @import("pattern.zig").euclid;
+pub const euclid_rot = @import("pattern.zig").euclid_rot;
 
 test {
     _ = @import("fraction.zig");

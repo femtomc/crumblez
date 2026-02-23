@@ -361,6 +361,188 @@ pub fn slowcat(comptime T: type, allocator: std.mem.Allocator, patterns: []const
     return .{ .slowcat_t = node };
 }
 
+fn rotateLeftBool(values: []bool, by: usize) void {
+    if (values.len <= 1) return;
+    std.mem.rotate(bool, values, by % values.len);
+}
+
+fn bjorklund(allocator: std.mem.Allocator, pulses: usize, steps: usize) std.mem.Allocator.Error![]bool {
+    if (steps == 0) return allocator.alloc(bool, 0);
+    if (pulses >= steps) {
+        const out = try allocator.alloc(bool, steps);
+        @memset(out, true);
+        return out;
+    }
+    if (pulses == 0) {
+        const out = try allocator.alloc(bool, steps);
+        @memset(out, false);
+        return out;
+    }
+
+    var counts: std.ArrayListUnmanaged(usize) = .empty;
+    defer counts.deinit(allocator);
+    var remainders: std.ArrayListUnmanaged(usize) = .empty;
+    defer remainders.deinit(allocator);
+
+    try remainders.append(allocator, pulses);
+
+    var divisor = steps - pulses;
+    while (true) {
+        const level_idx = remainders.items.len - 1;
+        const rem = remainders.items[level_idx];
+        try counts.append(allocator, @divTrunc(divisor, rem));
+        try remainders.append(allocator, @mod(divisor, rem));
+
+        divisor = rem;
+        if (remainders.items[remainders.items.len - 1] <= 1) break;
+    }
+    try counts.append(allocator, divisor);
+
+    var out: std.ArrayListUnmanaged(bool) = .empty;
+    errdefer out.deinit(allocator);
+
+    const Builder = struct {
+        fn run(
+            allocator_inner: std.mem.Allocator,
+            counts_inner: []const usize,
+            remainders_inner: []const usize,
+            output: *std.ArrayListUnmanaged(bool),
+            level: i64,
+        ) std.mem.Allocator.Error!void {
+            if (level == -1) {
+                try output.append(allocator_inner, false);
+                return;
+            }
+            if (level == -2) {
+                try output.append(allocator_inner, true);
+                return;
+            }
+
+            const idx: usize = @intCast(level);
+            var i: usize = 0;
+            while (i < counts_inner[idx]) : (i += 1) {
+                try run(allocator_inner, counts_inner, remainders_inner, output, level - 1);
+            }
+            if (remainders_inner[idx] != 0) {
+                try run(allocator_inner, counts_inner, remainders_inner, output, level - 2);
+            }
+        }
+    };
+
+    try Builder.run(allocator, counts.items, remainders.items, &out, @as(i64, @intCast(counts.items.len - 1)));
+    std.debug.assert(out.items.len == steps);
+
+    if (std.mem.indexOfScalar(bool, out.items, true)) |first_true| {
+        rotateLeftBool(out.items, first_true);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+pub fn euclid(allocator: std.mem.Allocator, pulses: i64, steps: i64, value: anytype) std.mem.Allocator.Error!Pattern(@TypeOf(value)) {
+    const T = @TypeOf(value);
+    const steps_u: usize = if (steps <= 0) 0 else @intCast(steps);
+    const pulses_u: usize = blk: {
+        if (pulses <= 0) break :blk 0;
+        if (steps_u == 0) break :blk 0;
+        const p: usize = @intCast(pulses);
+        break :blk @min(p, steps_u);
+    };
+
+    const bits = try bjorklund(allocator, pulses_u, steps_u);
+    defer allocator.free(bits);
+
+    const pats = try allocator.alloc(Pattern(T), bits.len);
+    defer allocator.free(pats);
+
+    for (bits, 0..) |is_pulse, i| {
+        pats[i] = if (is_pulse) pure(value) else silence(T);
+    }
+
+    return fastcat(T, allocator, pats);
+}
+
+pub fn euclid_rot(allocator: std.mem.Allocator, pulses: i64, steps: i64, rotation: i64, value: anytype) std.mem.Allocator.Error!Pattern(@TypeOf(value)) {
+    var pat = try euclid(allocator, pulses, steps, value);
+    errdefer pat.deinit(allocator);
+
+    if (steps <= 0) {
+        return pat;
+    }
+
+    return pat.late(allocator, Fraction.init(rotation, steps));
+}
+
+fn sampledSignal(
+    allocator: std.mem.Allocator,
+    comptime sample_count: usize,
+    comptime sampler: fn (phase: f64) f64,
+) std.mem.Allocator.Error!Pattern(f64) {
+    const pats = try allocator.alloc(Pattern(f64), sample_count);
+    defer allocator.free(pats);
+
+    for (pats, 0..) |*pat, i| {
+        const phase = @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(sample_count));
+        pat.* = pure(sampler(phase));
+    }
+
+    return fastcat(f64, allocator, pats);
+}
+
+pub fn saw(allocator: std.mem.Allocator) std.mem.Allocator.Error!Pattern(f64) {
+    return sampledSignal(allocator, 64, struct {
+        fn at(phase: f64) f64 {
+            return (2.0 * phase) - 1.0;
+        }
+    }.at);
+}
+
+pub fn sine(allocator: std.mem.Allocator) std.mem.Allocator.Error!Pattern(f64) {
+    return sampledSignal(allocator, 64, struct {
+        fn at(phase: f64) f64 {
+            return std.math.sin((2.0 * std.math.pi) * phase);
+        }
+    }.at);
+}
+
+pub fn cosine(allocator: std.mem.Allocator) std.mem.Allocator.Error!Pattern(f64) {
+    return sampledSignal(allocator, 64, struct {
+        fn at(phase: f64) f64 {
+            return std.math.cos((2.0 * std.math.pi) * phase);
+        }
+    }.at);
+}
+
+pub fn tri(allocator: std.mem.Allocator) std.mem.Allocator.Error!Pattern(f64) {
+    return sampledSignal(allocator, 64, struct {
+        fn at(phase: f64) f64 {
+            return 1.0 - (4.0 * @abs(phase - 0.5));
+        }
+    }.at);
+}
+
+pub fn square(allocator: std.mem.Allocator) std.mem.Allocator.Error!Pattern(f64) {
+    return sampledSignal(allocator, 64, struct {
+        fn at(phase: f64) f64 {
+            return if (phase < 0.5) 1.0 else -1.0;
+        }
+    }.at);
+}
+
+pub fn range(allocator: std.mem.Allocator, min: f64, max: f64) std.mem.Allocator.Error!Pattern(f64) {
+    const samples: usize = 64;
+    const pats = try allocator.alloc(Pattern(f64), samples);
+    defer allocator.free(pats);
+
+    const delta = max - min;
+    for (pats, 0..) |*pat, i| {
+        const phase = @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(samples));
+        pat.* = pure(min + (delta * phase));
+    }
+
+    return fastcat(f64, allocator, pats);
+}
+
 test "pure first cycle" {
     const pat = pure(@as(i32, 42));
     const haps = try pat.firstCycle(std.testing.allocator);
@@ -542,4 +724,206 @@ test "rust parity: test_slowcat_alternates wraps on cycle 2" {
     try std.testing.expectEqualStrings("a", haps[0].value);
     try std.testing.expectEqualStrings("b", haps[1].value);
     try std.testing.expectEqualStrings("a", haps[2].value);
+}
+
+test "utility saw stays in [-1,1) over first cycle" {
+    var pat = try saw(std.testing.allocator);
+    defer pat.deinit(std.testing.allocator);
+
+    const haps = try pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(haps);
+
+    try std.testing.expectEqual(@as(usize, 64), haps.len);
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), haps[0].value, 1e-9);
+    try std.testing.expect(haps[63].value < 1.0);
+    for (haps) |hap| {
+        try std.testing.expect(hap.value >= -1.0);
+        try std.testing.expect(hap.value < 1.0);
+    }
+}
+
+test "utility sine and cosine stay within unit amplitude" {
+    var sin_pat = try sine(std.testing.allocator);
+    defer sin_pat.deinit(std.testing.allocator);
+    var cos_pat = try cosine(std.testing.allocator);
+    defer cos_pat.deinit(std.testing.allocator);
+
+    const sin_haps = try sin_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(sin_haps);
+    const cos_haps = try cos_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(cos_haps);
+
+    try std.testing.expectEqual(@as(usize, 64), sin_haps.len);
+    try std.testing.expectEqual(@as(usize, 64), cos_haps.len);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), sin_haps[0].value, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), cos_haps[0].value, 1e-9);
+
+    for (sin_haps) |hap| {
+        try std.testing.expect(hap.value >= -1.0 and hap.value <= 1.0);
+    }
+    for (cos_haps) |hap| {
+        try std.testing.expect(hap.value >= -1.0 and hap.value <= 1.0);
+    }
+}
+
+test "utility tri and square hit expected extrema" {
+    var tri_pat = try tri(std.testing.allocator);
+    defer tri_pat.deinit(std.testing.allocator);
+    var sq_pat = try square(std.testing.allocator);
+    defer sq_pat.deinit(std.testing.allocator);
+
+    const tri_haps = try tri_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(tri_haps);
+    const sq_haps = try sq_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(sq_haps);
+
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), tri_haps[0].value, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), tri_haps[32].value, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), sq_haps[0].value, 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), sq_haps[32].value, 1e-9);
+}
+
+test "utility range ramps between provided bounds" {
+    var pat = try range(std.testing.allocator, 10.0, 20.0);
+    defer pat.deinit(std.testing.allocator);
+
+    const haps = try pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(haps);
+
+    try std.testing.expectEqual(@as(usize, 64), haps.len);
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), haps[0].value, 1e-9);
+    try std.testing.expect(haps[63].value > 19.8 and haps[63].value < 20.0);
+    for (haps, 1..) |hap, i| {
+        try std.testing.expect(hap.value >= haps[i - 1].value);
+    }
+}
+
+test "rust parity: test_bjorklund_algorithm" {
+    const p3_8 = try bjorklund(std.testing.allocator, 3, 8);
+    defer std.testing.allocator.free(p3_8);
+    try std.testing.expectEqualSlices(bool, &[_]bool{ true, false, false, true, false, false, true, false }, p3_8);
+
+    const p5_8 = try bjorklund(std.testing.allocator, 5, 8);
+    defer std.testing.allocator.free(p5_8);
+    try std.testing.expectEqualSlices(bool, &[_]bool{ true, false, true, true, false, true, true, false }, p5_8);
+
+    const p4_12 = try bjorklund(std.testing.allocator, 4, 12);
+    defer std.testing.allocator.free(p4_12);
+    try std.testing.expectEqualSlices(bool, &[_]bool{ true, false, false, true, false, false, true, false, false, true, false, false }, p4_12);
+}
+
+test "rust parity: test_euclid and edge cases" {
+    var pat = try euclid(std.testing.allocator, 3, 8, @as(i32, 1));
+    defer pat.deinit(std.testing.allocator);
+
+    const haps = try pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(haps);
+    try std.testing.expectEqual(@as(usize, 3), haps.len);
+
+    var zero = try euclid(std.testing.allocator, 0, 8, @as(i32, 1));
+    defer zero.deinit(std.testing.allocator);
+    const zero_haps = try zero.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(zero_haps);
+    try std.testing.expectEqual(@as(usize, 0), zero_haps.len);
+
+    var full = try euclid(std.testing.allocator, 8, 8, @as(i32, 1));
+    defer full.deinit(std.testing.allocator);
+    const full_haps = try full.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(full_haps);
+    try std.testing.expectEqual(@as(usize, 8), full_haps.len);
+}
+
+test "rust parity: test_euclid_positions and rotation" {
+    var pat = try euclid(std.testing.allocator, 3, 8, @as([]const u8, "a"));
+    defer pat.deinit(std.testing.allocator);
+
+    const haps = try pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(haps);
+
+    std.sort.heap(Hap([]const u8), haps, {}, struct {
+        fn lessThan(_: void, a: Hap([]const u8), b: Hap([]const u8)) bool {
+            return a.part.begin.cmp(b.part.begin) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqual(@as(usize, 3), haps.len);
+    try std.testing.expectEqual(Fraction.zero(), haps[0].part.begin);
+    try std.testing.expectEqual(Fraction.init(3, 8), haps[1].part.begin);
+    try std.testing.expectEqual(Fraction.init(3, 4), haps[2].part.begin);
+
+    var rotated = try euclid_rot(std.testing.allocator, 3, 8, 1, @as(i32, 9));
+    defer rotated.deinit(std.testing.allocator);
+    const rotated_haps = try rotated.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(rotated_haps);
+
+    std.sort.heap(Hap(i32), rotated_haps, {}, struct {
+        fn lessThan(_: void, a: Hap(i32), b: Hap(i32)) bool {
+            return a.part.begin.cmp(b.part.begin) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqual(@as(usize, 3), rotated_haps.len);
+    try std.testing.expectEqual(Fraction.init(1, 8), rotated_haps[0].part.begin);
+    try std.testing.expectEqual(Fraction.init(1, 2), rotated_haps[1].part.begin);
+    try std.testing.expectEqual(Fraction.init(7, 8), rotated_haps[2].part.begin);
+}
+
+test "rust parity: test_euclid_5_8_positions" {
+    var pat = try euclid(std.testing.allocator, 5, 8, @as([]const u8, "a"));
+    defer pat.deinit(std.testing.allocator);
+
+    const haps = try pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(haps);
+    try std.testing.expectEqual(@as(usize, 5), haps.len);
+}
+
+test "rust parity: test_signal_range" {
+    var saw_pat = try saw(std.testing.allocator);
+    defer saw_pat.deinit(std.testing.allocator);
+    const saw_haps = try saw_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(saw_haps);
+    try std.testing.expectEqual(@as(usize, 64), saw_haps.len);
+    for (saw_haps) |hap| {
+        try std.testing.expect(hap.value >= -1.0 and hap.value < 1.0);
+    }
+
+    var sine_pat = try sine(std.testing.allocator);
+    defer sine_pat.deinit(std.testing.allocator);
+    const sine_haps = try sine_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(sine_haps);
+    try std.testing.expectEqual(@as(usize, 64), sine_haps.len);
+    for (sine_haps) |hap| {
+        try std.testing.expect(hap.value >= -1.0 and hap.value <= 1.0);
+    }
+
+    var tri_pat = try tri(std.testing.allocator);
+    defer tri_pat.deinit(std.testing.allocator);
+    const tri_haps = try tri_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(tri_haps);
+    try std.testing.expectEqual(@as(usize, 64), tri_haps.len);
+    for (tri_haps) |hap| {
+        try std.testing.expect(hap.value >= -1.0 and hap.value <= 1.0);
+    }
+
+    var square_pat = try square(std.testing.allocator);
+    defer square_pat.deinit(std.testing.allocator);
+    const square_haps = try square_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(square_haps);
+    try std.testing.expectEqual(@as(usize, 64), square_haps.len);
+    for (square_haps) |hap| {
+        try std.testing.expect(hap.value == -1.0 or hap.value == 1.0);
+    }
+}
+
+test "rust parity: test_range_scaling" {
+    var pat = try range(std.testing.allocator, 100.0, 200.0);
+    defer pat.deinit(std.testing.allocator);
+
+    const haps = try pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(haps);
+
+    try std.testing.expectEqual(@as(usize, 64), haps.len);
+    for (haps) |hap| {
+        try std.testing.expect(hap.value >= 100.0 and hap.value < 200.0);
+    }
 }
