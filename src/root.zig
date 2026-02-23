@@ -30,6 +30,17 @@ pub const layer = @import("pattern.zig").layer;
 pub const superimpose = @import("pattern.zig").superimpose;
 pub const interleave = @import("pattern.zig").interleave;
 pub const timecat = @import("pattern.zig").timecat;
+pub const app_both = @import("pattern.zig").app_both;
+pub const app_left = @import("pattern.zig").app_left;
+pub const app_right = @import("pattern.zig").app_right;
+pub const join = @import("pattern.zig").join;
+pub const outer_join = @import("pattern.zig").outer_join;
+pub const inner_join = @import("pattern.zig").inner_join;
+pub const squeeze_join = @import("pattern.zig").squeeze_join;
+pub const bind = @import("pattern.zig").bind;
+pub const outer_bind = @import("pattern.zig").outer_bind;
+pub const inner_bind = @import("pattern.zig").inner_bind;
+pub const squeeze_bind = @import("pattern.zig").squeeze_bind;
 
 test {
     _ = @import("fraction.zig");

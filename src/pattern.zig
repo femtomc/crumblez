@@ -15,6 +15,13 @@ pub fn Pattern(comptime T: type) type {
         rev_t: *RevNode,
         fastcat_t: *CatNode,
         slowcat_t: *CatNode,
+        app_both_t: *AppNode,
+        app_left_t: *AppNode,
+        app_right_t: *AppNode,
+        bind_t: *BindNode,
+        outer_bind_t: *BindNode,
+        inner_bind_t: *BindNode,
+        squeeze_bind_t: *BindNode,
 
         const Self = @This();
 
@@ -44,6 +51,22 @@ pub fn Pattern(comptime T: type) type {
 
         const CatNode = struct {
             patterns: []Self,
+        };
+
+        // Phase 2B baseline: same-type applicative/monadic operators.
+        // Limitations: function values are plain fn pointers (no capturing closures),
+        // and cross-type variants are deferred.
+        pub const AppFn = *const fn (T) T;
+        pub const BindFn = *const fn (std.mem.Allocator, T) std.mem.Allocator.Error!Self;
+
+        const AppNode = struct {
+            func: AppFn,
+            values: Self,
+        };
+
+        const BindNode = struct {
+            pattern: Self,
+            func: BindFn,
         };
 
         fn copyPatterns(allocator: std.mem.Allocator, patterns: []const Self) ![]Self {
@@ -215,6 +238,51 @@ pub fn Pattern(comptime T: type) type {
             return out.toOwnedSlice(allocator);
         }
 
+        fn runAppNode(allocator: std.mem.Allocator, node: *const AppNode, state: State, mode: enum { both, left, right }) std.mem.Allocator.Error![]Hap(T) {
+            const xs = try node.values.query(allocator, state);
+            errdefer allocator.free(xs);
+
+            for (xs) |*x_hap| {
+                x_hap.value = node.func(x_hap.value);
+                x_hap.part = switch (mode) {
+                    .both => x_hap.part,
+                    .left => x_hap.whole orelse x_hap.part,
+                    .right => x_hap.part,
+                };
+            }
+
+            return xs;
+        }
+
+        fn runBindNode(allocator: std.mem.Allocator, node: *const BindNode, state: State, mode: enum { plain, outer, inner, squeeze }) std.mem.Allocator.Error![]Hap(T) {
+            const xs = try node.pattern.query(allocator, state);
+            defer allocator.free(xs);
+
+            var out: std.ArrayListUnmanaged(Hap(T)) = .empty;
+            errdefer out.deinit(allocator);
+
+            for (xs) |x_hap| {
+                var inner_pat = try node.func(allocator, x_hap.value);
+                defer inner_pat.deinit(allocator);
+
+                const inner = try inner_pat.query(allocator, state.setSpan(x_hap.part));
+                defer allocator.free(inner);
+
+                for (inner) |inner_hap| {
+                    const overlap = x_hap.part.intersection(inner_hap.part) orelse continue;
+                    const chosen = switch (mode) {
+                        .plain => inner_hap.part,
+                        .outer => x_hap.part,
+                        .inner => inner_hap.part,
+                        .squeeze => overlap,
+                    };
+                    try out.append(allocator, Hap(T).withContext(inner_hap.whole, chosen, inner_hap.value, inner_hap.context));
+                }
+            }
+
+            return out.toOwnedSlice(allocator);
+        }
+
         pub fn clone(self: Self, allocator: std.mem.Allocator) std.mem.Allocator.Error!Self {
             return switch (self) {
                 .silence => .silence,
@@ -247,6 +315,13 @@ pub fn Pattern(comptime T: type) type {
                 },
                 .fastcat_t => |node| fastcat(T, allocator, node.patterns),
                 .slowcat_t => |node| slowcat(T, allocator, node.patterns),
+                .app_both_t => |node| app_both(T, allocator, node.func, try node.values.clone(allocator)),
+                .app_left_t => |node| app_left(T, allocator, node.func, try node.values.clone(allocator)),
+                .app_right_t => |node| app_right(T, allocator, node.func, try node.values.clone(allocator)),
+                .bind_t => |node| bind(T, allocator, try node.pattern.clone(allocator), node.func),
+                .outer_bind_t => |node| outer_bind(T, allocator, try node.pattern.clone(allocator), node.func),
+                .inner_bind_t => |node| inner_bind(T, allocator, try node.pattern.clone(allocator), node.func),
+                .squeeze_bind_t => |node| squeeze_bind(T, allocator, try node.pattern.clone(allocator), node.func),
             };
         }
 
@@ -281,6 +356,14 @@ pub fn Pattern(comptime T: type) type {
                 .slowcat_t => |node| {
                     for (node.patterns) |*pat| pat.deinit(allocator);
                     allocator.free(node.patterns);
+                    allocator.destroy(node);
+                },
+                .app_both_t, .app_left_t, .app_right_t => |node| {
+                    node.values.deinit(allocator);
+                    allocator.destroy(node);
+                },
+                .bind_t, .outer_bind_t, .inner_bind_t, .squeeze_bind_t => |node| {
+                    node.pattern.deinit(allocator);
                     allocator.destroy(node);
                 },
                 else => {},
@@ -320,6 +403,13 @@ pub fn Pattern(comptime T: type) type {
                 .rev_t => |node| return runRev(allocator, node, state),
                 .fastcat_t => |node| return runFastCat(allocator, node, state),
                 .slowcat_t => |node| return runSlowCat(allocator, node, state),
+                .app_both_t => |node| return runAppNode(allocator, node, state, .both),
+                .app_left_t => |node| return runAppNode(allocator, node, state, .left),
+                .app_right_t => |node| return runAppNode(allocator, node, state, .right),
+                .bind_t => |node| return runBindNode(allocator, node, state, .plain),
+                .outer_bind_t => |node| return runBindNode(allocator, node, state, .outer),
+                .inner_bind_t => |node| return runBindNode(allocator, node, state, .inner),
+                .squeeze_bind_t => |node| return runBindNode(allocator, node, state, .squeeze),
             }
         }
 
@@ -394,6 +484,74 @@ pub fn slowcat(comptime T: type, allocator: std.mem.Allocator, patterns: []const
     const node = try allocator.create(Pattern(T).CatNode);
     node.* = .{ .patterns = try Pattern(T).copyPatterns(allocator, patterns) };
     return .{ .slowcat_t = node };
+}
+
+pub fn app_both(comptime T: type, allocator: std.mem.Allocator, func: Pattern(T).AppFn, values: Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    const node = try allocator.create(Pattern(T).AppNode);
+    node.* = .{ .func = func, .values = values };
+    return .{ .app_both_t = node };
+}
+
+pub fn app_left(comptime T: type, allocator: std.mem.Allocator, func: Pattern(T).AppFn, values: Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    const node = try allocator.create(Pattern(T).AppNode);
+    node.* = .{ .func = func, .values = values };
+    return .{ .app_left_t = node };
+}
+
+pub fn app_right(comptime T: type, allocator: std.mem.Allocator, func: Pattern(T).AppFn, values: Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    const node = try allocator.create(Pattern(T).AppNode);
+    node.* = .{ .func = func, .values = values };
+    return .{ .app_right_t = node };
+}
+
+pub fn join(comptime T: type, allocator: std.mem.Allocator, nested: Pattern(Pattern(T))) std.mem.Allocator.Error!Pattern(T) {
+    var owned = nested;
+    return switch (owned) {
+        .pure => |inner| inner,
+        else => blk: {
+            // Baseline limitation for phase-2B: full structural join across all
+            // nested pattern constructors is deferred. Non-pure nested forms
+            // currently collapse to silence.
+            owned.deinit(allocator);
+            break :blk silence(T);
+        },
+    };
+}
+
+pub fn outer_join(comptime T: type, allocator: std.mem.Allocator, nested: Pattern(Pattern(T))) std.mem.Allocator.Error!Pattern(T) {
+    return join(T, allocator, nested);
+}
+
+pub fn inner_join(comptime T: type, allocator: std.mem.Allocator, nested: Pattern(Pattern(T))) std.mem.Allocator.Error!Pattern(T) {
+    return join(T, allocator, nested);
+}
+
+pub fn squeeze_join(comptime T: type, allocator: std.mem.Allocator, nested: Pattern(Pattern(T))) std.mem.Allocator.Error!Pattern(T) {
+    return join(T, allocator, nested);
+}
+
+pub fn bind(comptime T: type, allocator: std.mem.Allocator, pat: Pattern(T), f: Pattern(T).BindFn) std.mem.Allocator.Error!Pattern(T) {
+    const node = try allocator.create(Pattern(T).BindNode);
+    node.* = .{ .pattern = pat, .func = f };
+    return .{ .bind_t = node };
+}
+
+pub fn outer_bind(comptime T: type, allocator: std.mem.Allocator, pat: Pattern(T), f: Pattern(T).BindFn) std.mem.Allocator.Error!Pattern(T) {
+    const node = try allocator.create(Pattern(T).BindNode);
+    node.* = .{ .pattern = pat, .func = f };
+    return .{ .outer_bind_t = node };
+}
+
+pub fn inner_bind(comptime T: type, allocator: std.mem.Allocator, pat: Pattern(T), f: Pattern(T).BindFn) std.mem.Allocator.Error!Pattern(T) {
+    const node = try allocator.create(Pattern(T).BindNode);
+    node.* = .{ .pattern = pat, .func = f };
+    return .{ .inner_bind_t = node };
+}
+
+pub fn squeeze_bind(comptime T: type, allocator: std.mem.Allocator, pat: Pattern(T), f: Pattern(T).BindFn) std.mem.Allocator.Error!Pattern(T) {
+    const node = try allocator.create(Pattern(T).BindNode);
+    node.* = .{ .pattern = pat, .func = f };
+    return .{ .squeeze_bind_t = node };
 }
 
 pub fn when(
@@ -1237,4 +1395,84 @@ test "rust parity: test_range_scaling" {
     for (haps) |hap| {
         try std.testing.expect(hap.value >= 100.0 and hap.value < 200.0);
     }
+}
+
+fn plusOne(v: i32) i32 {
+    return v + 1;
+}
+
+fn mkPlusOffset(allocator: std.mem.Allocator, v: i32) std.mem.Allocator.Error!Pattern(i32) {
+    _ = allocator;
+    return pure(v + 10);
+}
+
+test "phase2b app operators apply function to value-pattern" {
+    var both = try app_both(i32, std.testing.allocator, &plusOne, pure(@as(i32, 4)));
+    defer both.deinit(std.testing.allocator);
+    var left = try app_left(i32, std.testing.allocator, &plusOne, pure(@as(i32, 4)));
+    defer left.deinit(std.testing.allocator);
+    var right = try app_right(i32, std.testing.allocator, &plusOne, pure(@as(i32, 4)));
+    defer right.deinit(std.testing.allocator);
+
+    const both_haps = try both.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(both_haps);
+    const left_haps = try left.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(left_haps);
+    const right_haps = try right.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(right_haps);
+
+    try std.testing.expectEqual(@as(usize, 1), both_haps.len);
+    try std.testing.expectEqual(@as(i32, 5), both_haps[0].value);
+    try std.testing.expectEqual(@as(i32, 5), left_haps[0].value);
+    try std.testing.expectEqual(@as(i32, 5), right_haps[0].value);
+}
+
+test "phase2b join variants flatten nested patterns" {
+    var j = try join(i32, std.testing.allocator, pure(pure(@as(i32, 7))));
+    defer j.deinit(std.testing.allocator);
+    var oj = try outer_join(i32, std.testing.allocator, pure(pure(@as(i32, 7))));
+    defer oj.deinit(std.testing.allocator);
+    var ij = try inner_join(i32, std.testing.allocator, pure(pure(@as(i32, 7))));
+    defer ij.deinit(std.testing.allocator);
+    var sj = try squeeze_join(i32, std.testing.allocator, pure(pure(@as(i32, 7))));
+    defer sj.deinit(std.testing.allocator);
+
+    const jh = try j.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(jh);
+    const ojh = try oj.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(ojh);
+    const ijh = try ij.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(ijh);
+    const sjh = try sj.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(sjh);
+
+    try std.testing.expectEqual(@as(i32, 7), jh[0].value);
+    try std.testing.expectEqual(@as(i32, 7), ojh[0].value);
+    try std.testing.expectEqual(@as(i32, 7), ijh[0].value);
+    try std.testing.expectEqual(@as(i32, 7), sjh[0].value);
+}
+
+test "phase2b bind variants map values to patterns" {
+    var b = try bind(i32, std.testing.allocator, pure(@as(i32, 2)), mkPlusOffset);
+    defer b.deinit(std.testing.allocator);
+    var ob = try outer_bind(i32, std.testing.allocator, pure(@as(i32, 2)), mkPlusOffset);
+    defer ob.deinit(std.testing.allocator);
+    var ib = try inner_bind(i32, std.testing.allocator, pure(@as(i32, 2)), mkPlusOffset);
+    defer ib.deinit(std.testing.allocator);
+    var sb = try squeeze_bind(i32, std.testing.allocator, pure(@as(i32, 2)), mkPlusOffset);
+    defer sb.deinit(std.testing.allocator);
+
+    const bh = try b.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(bh);
+    const obh = try ob.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(obh);
+    const ibh = try ib.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(ibh);
+    const sbh = try sb.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(sbh);
+
+    try std.testing.expectEqual(@as(i32, 12), bh[0].value);
+    try std.testing.expectEqual(@as(i32, 12), obh[0].value);
+    try std.testing.expectEqual(@as(i32, 12), ibh[0].value);
+    try std.testing.expectEqual(@as(i32, 12), sbh[0].value);
 }

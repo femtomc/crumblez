@@ -36,11 +36,12 @@ verifiable milestones.
   - `zig test src/root.zig`
   - `zig build test`
 
-### Phase 2B: composition semantics deepening (next)
+### Phase 2B: composition semantics deepening (baseline delivered; deeper parity next)
 
-- [ ] Add combinator/applicative/monadic ops (`app_*`, `bind`, joins)
+- [x] Add baseline combinator/applicative/monadic ops (`app_*`, `bind`, joins) with documented scope limits
 - [ ] Add context/location propagation support
 - [ ] Deepen helper semantics beyond conservative phase-2A baseline (`every`, `interleave`, `timecat`, `superimpose` transform-overload behavior)
+- [ ] Expand join semantics beyond pure-nested baseline and add cross-type applicative/monadic variants
 
 ## Phase 3: DSL and runtime integration
 

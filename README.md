@@ -5,7 +5,9 @@ pattern engine for algorithmic music.
 
 ## Current status
 
-Phase-1 core parity checkpoint is delivered, and phase-2A composition baseline is now delivered.
+Phase-1 core parity is delivered, phase-2A helper baseline is delivered, and
+phase-2B applicative/monadic baseline is now delivered (with documented scope
+limits).
 
 Implemented so far:
 
@@ -21,14 +23,15 @@ Implemented so far:
   - phase-1 combinators/transforms: `stack`, `slowcat`, `fastcat`/`sequence`/`cat`, `fast`, `slow`, `early`, `late`, `rev`
   - utility-phase combinators/signals: `euclid`, `euclid_rot`, `range`, `saw`, `sine`, `cosine`, `tri`, `square`
   - phase-2A composition baseline: `first_of`, `every` (current alias semantics), `when`, `ply`, `layer`, `superimpose`, `interleave` (current `fastcat` alias), `timecat` (weighted slices)
-- Focused Rust→Zig semantic parity tests plus mapping note in `PHASE1_RUST_TEST_MAPPING.md` (including phase-2A parity-style extensions)
+  - phase-2B applicative/monadic baseline: `app_both`, `app_left`, `app_right`, `join`, `outer_join`, `inner_join`, `squeeze_join`, `bind`, `outer_bind`, `inner_bind`, `squeeze_bind`
+- Focused Rust→Zig semantic parity tests plus mapping notes in `PHASE1_RUST_TEST_MAPPING.md` (including phase-2A and phase-2B parity-style extensions)
 
-Validation status (phase-2A checkpoint):
+Validation status (current checkpoint):
 
 - `zig fmt src`
 - `zig test src/root.zig`
 - `zig build test`
-- Current result: passing (`60/60` tests)
+- Current result: passing (`63/63` tests)
 
 ## Near-term roadmap
 

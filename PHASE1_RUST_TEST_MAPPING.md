@@ -39,3 +39,15 @@ case, so these are tracked as Zig-side extensions scoped to phase-2A.
 | `layer` + `superimpose` | `phase2a parity: layer and superimpose stack values` | Verifies stacked event cardinality and value ordering. |
 | `interleave` | `phase2a parity: interleave matches fastcat segmentation` | Confirms current phase-2A aliasing behavior to `fastcat`. |
 | `timecat` | `phase2a parity: timecat applies weighted slices and skips non-positive weights` | Verifies weighted slicing plus skip of zero/negative weights. |
+
+## Phase-2B parity-style mapping extensions
+
+These entries cover the new applicative/monadic baseline landed in phase-2B.
+They are tracked as Zig-side parity-style checks because upstream Rust tests do
+not provide direct 1:1 names for each variant.
+
+| Phase-2B feature | Zig test name | Notes |
+| --- | --- | --- |
+| `app_both` / `app_left` / `app_right` | `phase2b app operators apply function to value-pattern` | Baseline uses same-type function pointer mapping (`AppFn`), no capturing closures. |
+| `join` / `outer_join` / `inner_join` / `squeeze_join` | `phase2b join variants flatten nested patterns` | Baseline currently guarantees flattening for nested pure(Pattern(T)); non-pure nested variants intentionally collapse to silence and are deferred. |
+| `bind` / `outer_bind` / `inner_bind` / `squeeze_bind` | `phase2b bind variants map values to patterns` | Baseline uses allocator-aware callback (`BindFn`) with same-type mapping and validates value propagation. |
