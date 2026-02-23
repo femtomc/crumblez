@@ -9,3 +9,15 @@ pub const Pattern = @import("pattern.zig").Pattern;
 
 pub const pure = @import("pattern.zig").pure;
 pub const silence = @import("pattern.zig").silence;
+pub const fastcat = @import("pattern.zig").fastcat;
+pub const sequence = @import("pattern.zig").sequence;
+pub const cat = @import("pattern.zig").cat;
+pub const slowcat = @import("pattern.zig").slowcat;
+
+test {
+    _ = @import("fraction.zig");
+    _ = @import("timespan.zig");
+    _ = @import("hap.zig");
+    _ = @import("state.zig");
+    _ = @import("pattern.zig");
+}

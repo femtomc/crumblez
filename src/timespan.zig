@@ -57,6 +57,21 @@ pub const TimeSpan = struct {
         return .{ .begin = b, .end = b.add(self.duration()) };
     }
 
+    pub fn withTime(self: TimeSpan, f: *const fn (Fraction) Fraction) TimeSpan {
+        return .{ .begin = f(self.begin), .end = f(self.end) };
+    }
+
+    pub fn withEnd(self: TimeSpan, f: *const fn (Fraction) Fraction) TimeSpan {
+        return .{ .begin = self.begin, .end = f(self.end) };
+    }
+
+    pub fn withCycle(self: TimeSpan, f: *const fn (Fraction) Fraction) TimeSpan {
+        const sam = self.begin.sam();
+        const b = sam.add(f(self.begin.sub(sam)));
+        const e = sam.add(f(self.end.sub(sam)));
+        return .{ .begin = b, .end = e };
+    }
+
     pub fn intersection(self: TimeSpan, other: TimeSpan) ?TimeSpan {
         const intersect_begin = self.begin.max(other.begin);
         const intersect_end = self.end.min(other.end);
@@ -77,6 +92,10 @@ pub const TimeSpan = struct {
         return .{ .begin = intersect_begin, .end = intersect_end };
     }
 
+    pub fn intersectionE(self: TimeSpan, other: TimeSpan) TimeSpan {
+        return self.intersection(other) orelse @panic("TimeSpans do not intersect");
+    }
+
     pub fn eql(self: TimeSpan, other: TimeSpan) bool {
         return self.begin.eql(other.begin) and self.end.eql(other.end);
     }
@@ -91,8 +110,25 @@ pub const TimeSpan = struct {
     }
 };
 
+fn addOne(v: Fraction) Fraction {
+    return v.add(Fraction.one());
+}
+
+fn halfCycle(v: Fraction) Fraction {
+    return v.div(Fraction.init(2, 1));
+}
+
 test "span cycles single" {
     const span = TimeSpan.init(Fraction.init(0, 1), Fraction.init(1, 1));
+    const cycles = try span.spanCycles(std.testing.allocator);
+    defer std.testing.allocator.free(cycles);
+
+    try std.testing.expectEqual(@as(usize, 1), cycles.len);
+    try std.testing.expectEqual(span, cycles[0]);
+}
+
+test "span cycles zero-width" {
+    const span = TimeSpan.init(Fraction.init(3, 2), Fraction.init(3, 2));
     const cycles = try span.spanCycles(std.testing.allocator);
     defer std.testing.allocator.free(cycles);
 
@@ -120,6 +156,24 @@ test "span cycles partial" {
     try std.testing.expectEqual(TimeSpan.init(Fraction.init(1, 1), Fraction.init(3, 2)), cycles[1]);
 }
 
+test "with time and cycle helpers" {
+    const span = TimeSpan.init(Fraction.init(1, 2), Fraction.init(3, 2));
+    try std.testing.expectEqual(
+        TimeSpan.init(Fraction.init(3, 2), Fraction.init(5, 2)),
+        span.withTime(addOne),
+    );
+
+    try std.testing.expectEqual(
+        TimeSpan.init(Fraction.init(1, 2), Fraction.init(5, 2)),
+        span.withEnd(addOne),
+    );
+
+    try std.testing.expectEqual(
+        TimeSpan.init(Fraction.init(1, 4), Fraction.init(3, 4)),
+        span.withCycle(halfCycle),
+    );
+}
+
 test "intersection" {
     const a = TimeSpan.init(Fraction.init(0, 1), Fraction.init(1, 1));
     const b = TimeSpan.init(Fraction.init(1, 2), Fraction.init(3, 2));
@@ -130,6 +184,22 @@ test "intersection" {
         TimeSpan.init(Fraction.init(1, 2), Fraction.init(1, 1)),
         intersection.?,
     );
+}
+
+test "intersection excludes touching open end" {
+    const a = TimeSpan.init(Fraction.init(0, 1), Fraction.init(1, 1));
+    const b = TimeSpan.init(Fraction.init(1, 1), Fraction.init(2, 1));
+
+    try std.testing.expectEqual(@as(?TimeSpan, null), a.intersection(b));
+}
+
+test "intersection keeps zero-width overlap at interior boundary" {
+    const point = TimeSpan.init(Fraction.init(1, 1), Fraction.init(1, 1));
+    const span = TimeSpan.init(Fraction.init(1, 1), Fraction.init(2, 1));
+
+    const intersection = point.intersection(span);
+    try std.testing.expect(intersection != null);
+    try std.testing.expectEqual(point, intersection.?);
 }
 
 test "no intersection" {

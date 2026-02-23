@@ -5,20 +5,21 @@ pattern engine for algorithmic music.
 
 ## Current status
 
-This repository is in bootstrap stage.
+Phase-1 core parity checkpoint is now delivered.
 
 Implemented so far:
 
 - Zig 0.15.2 package + build/test wiring
-- Core timing primitives:
-  - `Fraction`
+- Core timing/event/state primitives:
+  - `Fraction` parity pass (arith/cmp/min/max, `sam`/`nextSam`/`cyclePos`, floor/ceil, gcd/lcm, safe `fromF64` policy)
   - `TimeSpan`
   - `Hap(T)`
   - `State`
-- Minimal pattern core:
-  - `Pattern(T)` with `pure` and `silence`
-  - `query`, `queryArc`, `firstCycle`
-- Unit tests for the modules above
+- Composable pattern core:
+  - `Pattern(T)` with `pure`, `silence`
+  - query helpers (`query`, `queryArc`, `firstCycle`)
+  - phase-1 combinators/transforms: `stack`, `slowcat`, `fastcat`/`sequence`/`cat`, `fast`, `slow`, `early`, `late`, `rev`
+- Focused Rust→Zig semantic parity tests plus mapping note in `PHASE1_RUST_TEST_MAPPING.md`
 
 ## Near-term roadmap
 
