@@ -23,9 +23,24 @@ verifiable milestones.
 
 ## Phase 2: richer composition model
 
+### Phase 2A: composition helper baseline (completed)
+
+- [x] Add higher-level helper baseline:
+  - `first_of`, `every`, `when`
+  - `ply`
+  - `layer`, `superimpose`
+  - `interleave`, `timecat`
+- [x] Add focused parity-style coverage for phase-2A helpers
+- [x] Validate phase-2A checkpoint with:
+  - `zig fmt src`
+  - `zig test src/root.zig`
+  - `zig build test`
+
+### Phase 2B: composition semantics deepening (next)
+
 - [ ] Add combinator/applicative/monadic ops (`app_*`, `bind`, joins)
 - [ ] Add context/location propagation support
-- [ ] Add higher-level helpers (`every`, `ply`, `timecat`, `interleave`, etc.)
+- [ ] Deepen helper semantics beyond conservative phase-2A baseline (`every`, `interleave`, `timecat`, `superimpose` transform-overload behavior)
 
 ## Phase 3: DSL and runtime integration
 

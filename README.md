@@ -5,7 +5,7 @@ pattern engine for algorithmic music.
 
 ## Current status
 
-Phase-1 core parity checkpoint is now delivered, including utility-phase parity work.
+Phase-1 core parity checkpoint is delivered, and phase-2A composition baseline is now delivered.
 
 Implemented so far:
 
@@ -20,7 +20,15 @@ Implemented so far:
   - query helpers (`query`, `queryArc`, `firstCycle`)
   - phase-1 combinators/transforms: `stack`, `slowcat`, `fastcat`/`sequence`/`cat`, `fast`, `slow`, `early`, `late`, `rev`
   - utility-phase combinators/signals: `euclid`, `euclid_rot`, `range`, `saw`, `sine`, `cosine`, `tri`, `square`
-- Focused Rust→Zig semantic parity tests plus mapping note in `PHASE1_RUST_TEST_MAPPING.md` (including utility parity cases)
+  - phase-2A composition baseline: `first_of`, `every` (current alias semantics), `when`, `ply`, `layer`, `superimpose`, `interleave` (current `fastcat` alias), `timecat` (weighted slices)
+- Focused Rust→Zig semantic parity tests plus mapping note in `PHASE1_RUST_TEST_MAPPING.md` (including phase-2A parity-style extensions)
+
+Validation status (phase-2A checkpoint):
+
+- `zig fmt src`
+- `zig test src/root.zig`
+- `zig build test`
+- Current result: passing (`60/60` tests)
 
 ## Near-term roadmap
 

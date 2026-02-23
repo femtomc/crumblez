@@ -24,3 +24,18 @@ Also covered in Zig semantic tests (phase-1 helpers):
 - Rust `test_fastcat_two_things` -> Zig `fastcat splits cycle across patterns`
 - Rust stack semantics -> Zig `stack combines events from both patterns`
 - Utility signal shape checks -> Zig `utility saw stays in [-1,1) over first cycle`, `utility sine and cosine stay within unit amplitude`, `utility tri and square hit expected extrema`, `utility range ramps between provided bounds`
+
+## Phase-2A parity-style mapping extensions
+
+These entries cover newly landed combinators in `core/crumblez` with parity-style
+semantics checks. Upstream Rust does not currently expose 1:1 test names for each
+case, so these are tracked as Zig-side extensions scoped to phase-2A.
+
+| Phase-2A feature | Zig test name | Notes |
+| --- | --- | --- |
+| `first_of` window transform | `phase2a parity: first_of transforms first cycle in each window` | Verifies transformed cycle then unmodified cycle across 2-cycle window. |
+| `every` baseline semantics | `phase2a parity: every aliases first_of semantics` | Confirms conservative baseline (`every == first_of`) noted in implementation caveats. |
+| `ply` | `phase2a parity: ply triples density for pure source` | Checks event density increase with `copies=3` over one cycle. |
+| `layer` + `superimpose` | `phase2a parity: layer and superimpose stack values` | Verifies stacked event cardinality and value ordering. |
+| `interleave` | `phase2a parity: interleave matches fastcat segmentation` | Confirms current phase-2A aliasing behavior to `fastcat`. |
+| `timecat` | `phase2a parity: timecat applies weighted slices and skips non-positive weights` | Verifies weighted slicing plus skip of zero/negative weights. |

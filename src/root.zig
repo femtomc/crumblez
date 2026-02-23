@@ -21,6 +21,15 @@ pub const square = @import("pattern.zig").square;
 pub const range = @import("pattern.zig").range;
 pub const euclid = @import("pattern.zig").euclid;
 pub const euclid_rot = @import("pattern.zig").euclid_rot;
+pub const every = @import("pattern.zig").every;
+pub const first_of = @import("pattern.zig").first_of;
+pub const last_of = @import("pattern.zig").last_of;
+pub const when = @import("pattern.zig").when;
+pub const ply = @import("pattern.zig").ply;
+pub const layer = @import("pattern.zig").layer;
+pub const superimpose = @import("pattern.zig").superimpose;
+pub const interleave = @import("pattern.zig").interleave;
+pub const timecat = @import("pattern.zig").timecat;
 
 test {
     _ = @import("fraction.zig");

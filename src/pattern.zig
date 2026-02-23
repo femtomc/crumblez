@@ -215,6 +215,41 @@ pub fn Pattern(comptime T: type) type {
             return out.toOwnedSlice(allocator);
         }
 
+        pub fn clone(self: Self, allocator: std.mem.Allocator) std.mem.Allocator.Error!Self {
+            return switch (self) {
+                .silence => .silence,
+                .pure => |value| .{ .pure = value },
+                .stacked => |node| blk: {
+                    var left = try node.left.clone(allocator);
+                    errdefer left.deinit(allocator);
+                    const right = try node.right.clone(allocator);
+                    break :blk try left.stack(allocator, right);
+                },
+                .fast_t => |node| blk: {
+                    var child = try node.pattern.clone(allocator);
+                    errdefer child.deinit(allocator);
+                    break :blk try child.fast(allocator, node.factor);
+                },
+                .slow_t => |node| blk: {
+                    var child = try node.pattern.clone(allocator);
+                    errdefer child.deinit(allocator);
+                    break :blk try child.slow(allocator, node.factor);
+                },
+                .early_t => |node| blk: {
+                    var child = try node.pattern.clone(allocator);
+                    errdefer child.deinit(allocator);
+                    break :blk try child.early(allocator, node.offset);
+                },
+                .rev_t => |node| blk: {
+                    var child = try node.pattern.clone(allocator);
+                    errdefer child.deinit(allocator);
+                    break :blk try child.rev(allocator);
+                },
+                .fastcat_t => |node| fastcat(T, allocator, node.patterns),
+                .slowcat_t => |node| slowcat(T, allocator, node.patterns),
+            };
+        }
+
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             switch (self.*) {
                 .stacked => |node| {
@@ -359,6 +394,139 @@ pub fn slowcat(comptime T: type, allocator: std.mem.Allocator, patterns: []const
     const node = try allocator.create(Pattern(T).CatNode);
     node.* = .{ .patterns = try Pattern(T).copyPatterns(allocator, patterns) };
     return .{ .slowcat_t = node };
+}
+
+pub fn when(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    n_cycles: i64,
+    on_cycle: i64,
+    transform: anytype,
+    pat: Pattern(T),
+) std.mem.Allocator.Error!Pattern(T) {
+    if (n_cycles <= 0) return pat;
+
+    const n: usize = @intCast(n_cycles);
+    const idx_i64 = @mod(on_cycle, n_cycles);
+    const idx: usize = @intCast(idx_i64);
+
+    const slots = try allocator.alloc(Pattern(T), n);
+    errdefer allocator.free(slots);
+
+    var initialized: usize = 0;
+    errdefer {
+        for (slots[0..initialized]) |*slot| slot.deinit(allocator);
+    }
+
+    for (0..n) |i| {
+        if (i == idx) {
+            slots[i] = try transform(allocator, pat);
+        } else {
+            slots[i] = try pat.clone(allocator);
+        }
+        initialized += 1;
+    }
+
+    const out = try slowcat(T, allocator, slots);
+    allocator.free(slots);
+    return out;
+}
+
+pub fn first_of(comptime T: type, allocator: std.mem.Allocator, n_cycles: i64, transform: anytype, pat: Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    return when(T, allocator, n_cycles, 0, transform, pat);
+}
+
+pub fn last_of(comptime T: type, allocator: std.mem.Allocator, n_cycles: i64, transform: anytype, pat: Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    if (n_cycles <= 0) return pat;
+    return when(T, allocator, n_cycles, n_cycles - 1, transform, pat);
+}
+
+pub fn every(comptime T: type, allocator: std.mem.Allocator, n_cycles: i64, transform: anytype, pat: Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    return first_of(T, allocator, n_cycles, transform, pat);
+}
+
+pub fn ply(comptime T: type, allocator: std.mem.Allocator, copies: i64, pat: Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    if (copies <= 1) return pat;
+
+    const n: usize = @intCast(copies);
+    const factor = Fraction.fromInteger(copies);
+
+    var out = try (try pat.clone(allocator)).fast(allocator, factor);
+    errdefer out.deinit(allocator);
+
+    for (1..n) |i| {
+        const offset = Fraction.init(@intCast(i), copies);
+        var shifted = try (try pat.clone(allocator)).fast(allocator, factor);
+        errdefer shifted.deinit(allocator);
+        shifted = try shifted.late(allocator, offset);
+
+        out = try out.stack(allocator, shifted);
+    }
+
+    return out;
+}
+
+pub fn superimpose(comptime T: type, allocator: std.mem.Allocator, left: Pattern(T), right: Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    return left.stack(allocator, right);
+}
+
+pub fn layer(comptime T: type, allocator: std.mem.Allocator, patterns: []const Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    if (patterns.len == 0) return silence(T);
+
+    var out = try patterns[0].clone(allocator);
+    errdefer out.deinit(allocator);
+
+    for (patterns[1..]) |pat| {
+        out = try out.stack(allocator, try pat.clone(allocator));
+    }
+
+    return out;
+}
+
+pub fn interleave(comptime T: type, allocator: std.mem.Allocator, patterns: []const Pattern(T)) std.mem.Allocator.Error!Pattern(T) {
+    return fastcat(T, allocator, patterns);
+}
+
+pub fn timecat(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    weights: []const Fraction,
+    patterns: []const Pattern(T),
+) std.mem.Allocator.Error!Pattern(T) {
+    if (weights.len == 0 or patterns.len == 0 or weights.len != patterns.len) {
+        return silence(T);
+    }
+
+    var total = Fraction.zero();
+    for (weights) |w| {
+        if (w.cmp(Fraction.zero()) != .gt) continue;
+        total = total.add(w);
+    }
+    if (total.isZero()) return silence(T);
+
+    var cursor = Fraction.zero();
+    var out: ?Pattern(T) = null;
+    errdefer if (out) |*pat| pat.deinit(allocator);
+
+    for (weights, patterns) |w, pat| {
+        if (w.cmp(Fraction.zero()) != .gt) continue;
+
+        const span = w.div(total);
+
+        var seg = try (try pat.clone(allocator)).slow(allocator, span);
+        errdefer seg.deinit(allocator);
+        seg = try seg.late(allocator, cursor);
+
+        if (out) |existing| {
+            out = try existing.stack(allocator, seg);
+        } else {
+            out = seg;
+        }
+
+        cursor = cursor.add(span);
+    }
+
+    return out orelse silence(T);
 }
 
 fn rotateLeftBool(values: []bool, by: usize) void {
@@ -658,6 +826,149 @@ test "slowcat alternates patterns per cycle" {
     try std.testing.expectEqual(@as(usize, 2), haps.len);
     try std.testing.expectEqual(@as(u8, 3), haps[0].value);
     try std.testing.expectEqual(@as(u8, 9), haps[1].value);
+}
+
+test "phase2a parity: first_of transforms first cycle in each window" {
+    var pat = try first_of(u8, std.testing.allocator, 2, struct {
+        fn apply(allocator: std.mem.Allocator, p: Pattern(u8)) std.mem.Allocator.Error!Pattern(u8) {
+            return p.rev(allocator);
+        }
+    }.apply, try sequence(u8, std.testing.allocator, &[_]Pattern(u8){ pure(@as(u8, 1)), pure(@as(u8, 2)) }));
+    defer pat.deinit(std.testing.allocator);
+
+    const haps = try pat.queryArc(std.testing.allocator, Fraction.zero(), Fraction.fromInteger(2));
+    defer std.testing.allocator.free(haps);
+
+    std.sort.heap(Hap(u8), haps, {}, struct {
+        fn lessThan(_: void, a: Hap(u8), b: Hap(u8)) bool {
+            return a.part.begin.cmp(b.part.begin) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqual(@as(usize, 4), haps.len);
+    try std.testing.expectEqual(@as(u8, 2), haps[0].value);
+    try std.testing.expectEqual(@as(u8, 1), haps[1].value);
+    try std.testing.expectEqual(@as(u8, 1), haps[2].value);
+    try std.testing.expectEqual(@as(u8, 2), haps[3].value);
+}
+
+test "phase2a parity: every aliases first_of semantics" {
+    var via_every = try every(u8, std.testing.allocator, 2, struct {
+        fn apply(allocator: std.mem.Allocator, p: Pattern(u8)) std.mem.Allocator.Error!Pattern(u8) {
+            return p.rev(allocator);
+        }
+    }.apply, try sequence(u8, std.testing.allocator, &[_]Pattern(u8){ pure(@as(u8, 1)), pure(@as(u8, 2)) }));
+    defer via_every.deinit(std.testing.allocator);
+
+    var via_first_of = try first_of(u8, std.testing.allocator, 2, struct {
+        fn apply(allocator: std.mem.Allocator, p: Pattern(u8)) std.mem.Allocator.Error!Pattern(u8) {
+            return p.rev(allocator);
+        }
+    }.apply, try sequence(u8, std.testing.allocator, &[_]Pattern(u8){ pure(@as(u8, 1)), pure(@as(u8, 2)) }));
+    defer via_first_of.deinit(std.testing.allocator);
+
+    const every_haps = try via_every.queryArc(std.testing.allocator, Fraction.zero(), Fraction.fromInteger(2));
+    defer std.testing.allocator.free(every_haps);
+    const first_haps = try via_first_of.queryArc(std.testing.allocator, Fraction.zero(), Fraction.fromInteger(2));
+    defer std.testing.allocator.free(first_haps);
+
+    std.sort.heap(Hap(u8), every_haps, {}, struct {
+        fn lessThan(_: void, a: Hap(u8), b: Hap(u8)) bool {
+            return a.part.begin.cmp(b.part.begin) == .lt;
+        }
+    }.lessThan);
+    std.sort.heap(Hap(u8), first_haps, {}, struct {
+        fn lessThan(_: void, a: Hap(u8), b: Hap(u8)) bool {
+            return a.part.begin.cmp(b.part.begin) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expectEqual(@as(usize, first_haps.len), every_haps.len);
+    for (every_haps, first_haps) |left, right| {
+        try std.testing.expectEqual(left.value, right.value);
+        try std.testing.expectEqual(left.part.begin, right.part.begin);
+        try std.testing.expectEqual(left.part.end, right.part.end);
+    }
+}
+
+test "phase2a parity: ply triples density for pure source" {
+    var pat = try ply(u8, std.testing.allocator, 3, pure(@as(u8, 7)));
+    defer pat.deinit(std.testing.allocator);
+
+    const haps = try pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(haps);
+
+    try std.testing.expectEqual(@as(usize, 9), haps.len);
+}
+
+test "phase2a parity: layer and superimpose stack values" {
+    var layered = try layer(u8, std.testing.allocator, &[_]Pattern(u8){ pure(@as(u8, 1)), pure(@as(u8, 2)), pure(@as(u8, 3)) });
+    defer layered.deinit(std.testing.allocator);
+
+    const layer_haps = try layered.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(layer_haps);
+    try std.testing.expectEqual(@as(usize, 3), layer_haps.len);
+    try std.testing.expectEqual(@as(u8, 1), layer_haps[0].value);
+    try std.testing.expectEqual(@as(u8, 2), layer_haps[1].value);
+    try std.testing.expectEqual(@as(u8, 3), layer_haps[2].value);
+
+    var over = try superimpose(u8, std.testing.allocator, pure(@as(u8, 10)), pure(@as(u8, 11)));
+    defer over.deinit(std.testing.allocator);
+    const over_haps = try over.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(over_haps);
+    try std.testing.expectEqual(@as(usize, 2), over_haps.len);
+    try std.testing.expectEqual(@as(u8, 10), over_haps[0].value);
+    try std.testing.expectEqual(@as(u8, 11), over_haps[1].value);
+}
+
+test "phase2a parity: interleave matches fastcat segmentation" {
+    const pats = [_]Pattern(u8){ pure(@as(u8, 4)), pure(@as(u8, 5)) };
+
+    var int_pat = try interleave(u8, std.testing.allocator, &pats);
+    defer int_pat.deinit(std.testing.allocator);
+    var fc_pat = try fastcat(u8, std.testing.allocator, &pats);
+    defer fc_pat.deinit(std.testing.allocator);
+
+    const int_haps = try int_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(int_haps);
+    const fc_haps = try fc_pat.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(fc_haps);
+
+    try std.testing.expectEqual(@as(usize, fc_haps.len), int_haps.len);
+    for (int_haps, fc_haps) |left, right| {
+        try std.testing.expectEqual(left.value, right.value);
+        try std.testing.expectEqual(left.part.begin, right.part.begin);
+        try std.testing.expectEqual(left.part.end, right.part.end);
+    }
+}
+
+test "phase2a parity: timecat applies weighted slices and skips non-positive weights" {
+    const weights = [_]Fraction{ Fraction.init(1, 1), Fraction.zero(), Fraction.init(3, 1), Fraction.init(-1, 1) };
+    const pats = [_]Pattern(u8){ pure(@as(u8, 1)), pure(@as(u8, 99)), pure(@as(u8, 2)), pure(@as(u8, 88)) };
+    var tc = try timecat(u8, std.testing.allocator, &weights, &pats);
+    defer tc.deinit(std.testing.allocator);
+
+    const tc_haps = try tc.firstCycle(std.testing.allocator);
+    defer std.testing.allocator.free(tc_haps);
+
+    std.sort.heap(Hap(u8), tc_haps, {}, struct {
+        fn lessThan(_: void, a: Hap(u8), b: Hap(u8)) bool {
+            return a.part.begin.cmp(b.part.begin) == .lt;
+        }
+    }.lessThan);
+
+    try std.testing.expect(tc_haps.len >= 2);
+
+    var seen_first = false;
+    var seen_second = false;
+    for (tc_haps) |hap| {
+        try std.testing.expect(hap.value == 1 or hap.value == 2);
+        if (hap.value == 1) seen_first = true;
+        if (hap.value == 2) seen_second = true;
+    }
+
+    try std.testing.expect(seen_first);
+    try std.testing.expect(seen_second);
 }
 
 test "rust parity: test_sequence preserves value order" {
